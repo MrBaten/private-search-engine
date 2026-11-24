@@ -1,0 +1,7 @@
+# Keep tests and dev tooling out of the runtime image.
+tests
+__pycache__
+*.pyc
+.pytest_cache
+requirements-dev.txt
+pytest.ini

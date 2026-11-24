@@ -1,0 +1,36 @@
+# SearXNG limiter / bot-detection overrides. Only changed keys are listed; the
+# rest comes from the defaults shipped in the image.
+# Documented at docs.searxng.org/admin/searx.limiter.html (read at startup only).
+
+[botdetection]
+# Group clients by /32 (IPv4) and /48 (IPv6) when counting requests (defaults).
+ipv4_prefix = 32
+ipv6_prefix = 48
+
+# Nginx reaches SearXNG over the docker bridge network, so every request
+# arrives from a private address. The limiter only trusts X-Forwarded-For /
+# X-Real-IP when the connection comes from a trusted proxy; without this list
+# all users would share Nginx's IP and one heavy user would rate-limit everyone.
+# (Current docs have no [real_ip] section; trusted_proxies is the key.)
+# Docker networks always allocate from these RFC1918 ranges.
+trusted_proxies = [
+  '127.0.0.0/8',
+  '::1',
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+]
+
+[botdetection.ip_limit]
+# Link-local addresses are not exempt; keep checking them (default).
+filter_link_local = false
+# link_token needs public_instance and JS-based checks; off for a private instance
+# (default).
+link_token = false
+
+[botdetection.ip_lists]
+# Lists of IPs/networks that are always blocked / always let through.
+block_ip = []
+pass_ip = []
+# Do not allow the public SearXNG checker hosts through the limiter.
+pass_searxng_org = false

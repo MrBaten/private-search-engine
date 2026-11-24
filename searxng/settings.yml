@@ -1,0 +1,69 @@
+# SearXNG settings for the private-search-engine project.
+# Only the keys we change are listed; everything else comes from the image defaults.
+# Keys verified against docs.searxng.org (admin/settings/*) and the upstream
+# searx/settings.yml on 2026-11-24.
+
+# Start from the upstream defaults so this file stays small and new engines /
+# fixes shipped with the image keep working.
+use_default_settings: true
+
+general:
+  instance_name: "My Private Search"
+  # Do not record usage statistics (/stats, /stats/errors). Less data kept = more privacy.
+  enable_metrics: false
+  # Never run the debugger / verbose logging in a deployed container.
+  debug: false
+
+search:
+  # 0 = off, 1 = moderate, 2 = strict.
+  safe_search: 1
+  # Autocomplete backend. NOTE: the browser asks SearXNG, SearXNG asks DuckDuckGo
+  # on the user's behalf, so DuckDuckGo never sees the user's IP.
+  autocomplete: "duckduckgo"
+
+server:
+  # The secret is NOT stored here: the SEARXNG_SECRET env variable (from .env)
+  # overrides server.secret_key at startup (documented in settings_server).
+  # The value below is only a fallback that must never be used in production.
+  secret_key: "overridden-by-SEARXNG_SECRET-env"
+  # SEARXNG_BASE_URL env (from .env) overrides server.base_url.
+  # base_url is intentionally not set here.
+  # Enable the bot limiter (requires the valkey service, see valkey: below).
+  limiter: true
+  # Not a public-internet instance: this skips public-only features (the
+  # limiter link_token check). Rate limiting still works via limiter.toml.
+  public_instance: false
+  # Proxy result thumbnails through SearXNG so the user's browser never
+  # contacts third-party image hosts (no IP / referrer leak).
+  image_proxy: true
+  # POST keeps queries out of browser history, the address bar and proxy logs.
+  method: "POST"
+
+valkey:
+  # Hostname "valkey" is the compose service name, identical in the standalone
+  # stack (searxng/docker-compose.yml) and in the root stack.
+  # Limiter state only; the valkey container persists nothing to disk.
+  url: valkey://valkey:6379/0
+
+outgoing:
+  # SearXNG has no "outgoing.user_agent" key (docs.searxng.org/admin/settings/settings_outgoing).
+  # Engines that need a browser identity call searx.utils.gen_useragent(), which
+  # picks a random OS and browser version on every call (docs.searxng.org/_modules/searx/utils).
+  # The only related knob is useragent_suffix, deliberately left empty so no
+  # contact details or instance fingerprint are appended to outgoing requests.
+  useragent_suffix: ""
+  # Give up on slow engines quickly; results from the others are still shown.
+  request_timeout: 3.0
+  max_request_timeout: 10.0
+  # Reuse connections between requests (default is 100, kept modest here).
+  pool_connections: 50
+  # Retry once on HTTP errors (each retry may use a different proxy/source IP if configured).
+  retries: 1
+
+ui:
+  # Keep the search term out of the page <title> (it ends up in history and bookmarks).
+  query_in_title: false
+  # Default (and only maintained) theme.
+  default_theme: simple
+  # Open results in a new tab so the search page stays open.
+  results_on_new_tab: true

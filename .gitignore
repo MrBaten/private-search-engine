@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets and local state (keep the example file)
+.env
+searxng/.env
+!searxng/.env.example
+searxng/data/
+
+# Runtime output
+logs/
+data/
+*.log
+
+# OS
+.DS_Store

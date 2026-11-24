@@ -1,0 +1,60 @@
+# Standalone SearXNG stack.
+#   cd searxng && docker compose up -d       (or from the repo root:
+#   docker compose -f searxng/docker-compose.yml up -d)
+# Then open http://localhost:8080/
+#
+# Shipped state is secure-by-default: nothing is persisted, nothing is logged.
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    restart: always
+    ports:
+      # Change to "127.0.0.1:8080:8080" to keep it off the LAN.
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # The settings/limiter files are mounted read-only, so the entrypoint
+      # must not try to chown them.
+      - FORCE_OWNERSHIP=false
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+      - ./limiter.toml:/etc/searxng/limiter.toml:ro
+    # Least privilege: drop everything, add back only what the entrypoint needs
+    # to switch to the unprivileged searxng user.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    # Privacy: no container logs at all (they would contain request metadata).
+    logging:
+      driver: "none"
+    depends_on:
+      - valkey
+    networks:
+      - searxng
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: always
+    # Privacy: keep limiter state in RAM only. No snapshots, no append-only file.
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    # The valkey entrypoint starts as root and steps down to the valkey user.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    logging:
+      driver: "none"
+    networks:
+      - searxng
+
+networks:
+  searxng:
