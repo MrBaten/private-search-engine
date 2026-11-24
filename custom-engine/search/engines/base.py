@@ -27,17 +27,20 @@ logger = logging.getLogger(__name__)
 
 MAX_RESULTS_PER_ENGINE = 10
 
+# Current stable desktop browsers as of 2026-11 (Chrome 157: Chrome Releases
+# blog, 2026-11-03; Firefox 160: Mozilla, 2026-11-10). Chrome uses the reduced
+# UA format ("157.0.0.0", frozen macOS 10_15_7). Refresh these when browsers
+# move on: stale versions make requests stand out and get blocked more often.
 USER_AGENTS: tuple[str, ...] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/130.0.0.0 Safari/537.36",
+    "Chrome/157.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/130.0.0.0 Safari/537.36",
+    "Chrome/157.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) "
-    "Version/18.0 Safari/605.1.15",
+    "Chrome/157.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:160.0) Gecko/20100101 Firefox/160.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:160.0) Gecko/20100101 Firefox/160.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:160.0) Gecko/20100101 Firefox/160.0",
 )
 
 _WS_RE = re.compile(r"\s+")

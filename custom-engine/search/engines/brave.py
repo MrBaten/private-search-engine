@@ -2,8 +2,20 @@
 
 Brave Search has no free keyless API, so this module parses the public HTML
 results page. Brave's markup is undocumented and changes often, therefore the
-parser is layered: a primary parser for the known result containers and a
-generic fallback that harvests external links inside ``#results``.
+parser is layered:
+
+0. Embedded page data (current layout, verified against live Brave results in
+   Nov 2026). Result links in the markup are opaque ``/go/v1/<token>``
+   redirects, but the page embeds its results as a JavaScript object literal
+   (``web:{type:"search",...,results:[{title:..,url:..,description:..,
+   meta_url:{scheme,netloc,hostname,favicon,path}},...]}``). The destination
+   is rebuilt from ``meta_url``: scheme + hostname + the breadcrumb ``path``
+   (``"› python  › python_intro.asp"`` -> ``/python/python_intro.asp``).
+   Breadcrumbs that are human-readable labels rather than URL path segments
+   (e.g. ``"› google for education"``) cannot be turned into a real URL, so
+   those results are dropped instead of guessed.
+1. Result containers (``div[data-type="web"]``) with direct external links.
+2. A generic fallback that harvests external links inside ``#results``.
 
 Brave frequently serves a captcha or rate-limit page to scraping clients. In
 that case this module deliberately keeps the engine interface and returns an
@@ -162,6 +174,126 @@ def _parse_fallback(soup: BeautifulSoup) -> list[Result]:
     return out
 
 
+# --- Layer 0: embedded results data -------------------------------------
+
+_DATA_MARKER = 'web:{type:"search"'
+_JS_STR = r'"((?:[^"\\]|\\.)*)"'
+_TITLE_RE = re.compile(r"(?:^\{|,)title:" + _JS_STR)
+_URL_RE = re.compile(r",url:" + _JS_STR)
+_DESC_RE = re.compile(r",description:" + _JS_STR)
+_META_URL_RE = re.compile(
+    r"meta_url:\{scheme:" + _JS_STR + r",netloc:" + _JS_STR + r",hostname:" + _JS_STR
+    + r",favicon:(?:" + _JS_STR + r"|[\w$]+),path:" + _JS_STR + r"\}"
+)
+# One URL path segment: unreserved / sub-delims / pct-encoded / ":" "@".
+_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._~%!$&'()*+,;=:@-]+$")
+_HOST_RE = re.compile(r"^[A-Za-z0-9.-]+$")
+
+
+def _js_unescape(raw: str) -> str:
+    """Decode a JavaScript double-quoted string body (\\uXXXX, \\", \\\\ ...)."""
+    import json
+
+    try:
+        return json.loads('"' + raw + '"')
+    except ValueError:
+        return raw
+
+
+def _split_js_objects(text: str, start: int) -> list[str]:
+    """Split the top-level ``{...}`` objects of the JS array starting at ``start``.
+
+    ``start`` points just after the opening ``[``. String literals are skipped so
+    braces inside titles or descriptions do not confuse the depth count.
+    """
+    objs: list[str] = []
+    depth = 0
+    in_str = False
+    esc = False
+    obj_start = start
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c in "{[":
+            if depth == 0 and c == "{":
+                obj_start = i
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+            if depth == 0 and c == "}":
+                objs.append(text[obj_start:i + 1])
+            if depth < 0:
+                break
+    return objs
+
+
+def _rebuild_url(obj: str) -> Optional[str]:
+    """Destination URL for one embedded result, or None if it can't be trusted."""
+    m = _URL_RE.search(obj)
+    if m:
+        direct = _external_url(_js_unescape(m.group(1)))
+        if direct:
+            return direct
+    meta = _META_URL_RE.search(obj)
+    if not meta:
+        return None
+    scheme = _js_unescape(meta.group(1)).lower()
+    host = _js_unescape(meta.group(3)).lower()
+    path_label = _js_unescape(meta.group(5))
+    if scheme not in ("http", "https") or not host or not _HOST_RE.match(host):
+        return None
+    if _is_brave_host(host):
+        return None
+    segments = [seg.strip() for seg in path_label.split("\u203a")]
+    segments = [seg for seg in segments if seg]
+    if any(not _PATH_SEGMENT_RE.match(seg) for seg in segments):
+        # Human-readable breadcrumb ("google for education"), not a real path.
+        return None
+    return f"{scheme}://{host}/" + "/".join(segments)
+
+
+def _parse_embedded(html: str) -> list[Result]:
+    """Layer 0: results from the page's embedded ``web.results`` data."""
+    pos = html.find(_DATA_MARKER)
+    if pos < 0:
+        return []
+    arr = html.find("results:[", pos)
+    if arr < 0 or arr - pos > 500:
+        return []
+    out: list[Result] = []
+    seen: set[str] = set()
+    for obj in _split_js_objects(html, arr + len("results:[")):
+        if 'type:"search_result"' not in obj:
+            continue
+        t = _TITLE_RE.search(obj)
+        url = _rebuild_url(obj)
+        if not t or not url or url in seen:
+            continue
+        title = base.clean_text(_js_unescape(t.group(1)))
+        if not title:
+            continue
+        d = _DESC_RE.search(obj)
+        snippet = ""
+        if d:
+            snippet = base.clean_text(
+                BeautifulSoup(_js_unescape(d.group(1)), "html.parser").get_text()
+            )
+        seen.add(url)
+        out.append(Result(title=title, url=url, snippet=snippet, engine=NAME))
+        if len(out) >= base.MAX_RESULTS_PER_ENGINE:
+            break
+    return out
+
+
 def _looks_blocked(soup: BeautifulSoup) -> bool:
     """True for a captcha / rate-limit page (markers and no results container)."""
     if soup.select_one("#results") or soup.select_one("div[data-type]"):
@@ -176,7 +308,7 @@ def _parse(html: str) -> list[Result]:
     if _looks_blocked(soup):
         logger.warning("brave: captcha or rate-limit page, skipping")
         return []
-    results = _parse_primary(soup) or _parse_fallback(soup)
+    results = _parse_embedded(html) or _parse_primary(soup) or _parse_fallback(soup)
     return results[: base.MAX_RESULTS_PER_ENGINE]
 
 

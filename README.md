@@ -364,9 +364,16 @@ private-search-engine/
   are listed as unavailable on the results page; an engine that is silently
   blocked just contributes no results. Expect to maintain the parsers. Wikipedia uses its API and is
   the most stable.
-- **Not verified against live engines in every environment.** The test suite
-  mocks HTTP, so passing tests show the parsing and merging logic works on
-  saved samples, not that every engine currently accepts your server.
+- **Live markup check (2026-11-24).** The selectors were checked against live
+  DuckDuckGo, Bing, Brave and Wikipedia results pages in a real browser. That
+  check led to a Brave fix: its result links are now opaque `/go/v1/` redirects,
+  so the parser reads Brave's embedded results data and rebuilds each URL from
+  the hostname and breadcrumb path. Results whose breadcrumb is a
+  human-readable label rather than a URL path (about 1 in 5 in that sample)
+  are dropped rather than guessed.
+- **The test suite mocks HTTP.** Passing tests show the parsing and merging
+  logic works on saved samples (including verbatim Brave result data), not
+  that every engine accepts requests from your server's IP today.
 - **Images, Videos and News tabs are UI-only for now.** The backend returns the
   same combined web results for those tabs; only the Wikipedia tab filters.
 - **Terms of service.** Automated querying of search engines may be restricted

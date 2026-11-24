@@ -129,3 +129,69 @@ def test_safesearch_param(monkeypatch: pytest.MonkeyPatch) -> None:
     assert p1 == {"q": "hello", "source": "web", "safesearch": "strict"}
     assert p2["safesearch"] == "off"
     assert calls[1][1]["headers"]["Accept-Language"].startswith("en")
+
+
+# ---------------------------------------------------------------------------
+# Layer 0: embedded results data (current Brave layout, Nov 2026).
+# O_PYTHON and O_W3 are verbatim result objects captured from a live Brave
+# results page; the other two are constructed edge cases in the same format.
+# ---------------------------------------------------------------------------
+O_PYTHON = (
+    '{title:"Welcome to Python.org",url:"/go/v1/AcmKWfGeqFK1awUqOAH7CvjByKWyfQZ0Ox8U6_GRgBVFmzT6MzQ0V8k_sZ4BIBzfvjuJlvDfcjZpw31aVkCy2O_RSi5tR54UPjJDkAJo9AH0A83_3UnPRJpiORNrE_-KSz6TMFmM5lVAcTi3st4PBMOivVTuJM4OR2rCfn2kOyn3nyQDdPbx-U0A",'
+    'full_title:void 0,description:"\\u003Cstrong>Python is a programming language that lets you work quickly and integrate systems more effectively\\u003C/strong>.",'
+    'page_age:void 0,profile:{name:"Python",long_name:"python.org"},language:"en",type:"search_result",subtype:"generic",is_live:false,deep_results:void 0,'
+    'meta_url:{scheme:"https",netloc:"python.org",hostname:"www.python.org",favicon:e,path:""},'
+    'thumbnail:{src:f,original:"https://www.python.org/static/opengraph-icon-200x200.png",logo:true,duplicated:true,is_tripadvisor:false,bo_serp_visible:false},'
+    'age:void 0,descriptionLength:52}'
+)
+O_W3 = (
+    '{title:"Introduction to Python",url:"/go/v1/AcmKWfGeqFK1awUqOAH7CvjByKWyfQZ0Ox8U6_GRgtDpRNdDRQXzHcG-f9DSGeq_79zMrdqucqA3hrfezJqD",'
+    'full_title:void 0,description:"Python is a popular programming language. It was \\u003Cstrong>created by Guido van Rossum, and released in 1991\\u003C/strong>.",'
+    'page_age:void 0,profile:{name:"W3Schools",long_name:"w3schools.com"},language:"en",type:"search_result",subtype:"generic",is_live:false,deep_results:void 0,'
+    'meta_url:{scheme:"https",netloc:"w3schools.com",hostname:"www.w3schools.com",favicon:g,path:"› python  › python_intro.asp"},'
+    'thumbnail:{src:"https://imgs.search.brave.com/x/rs:fit:200:200:1:0/g:ce/aHR0c",original:"https://www.w3schools.com/images/og/python/python_intro.png",logo:false},'
+    'age:void 0,descriptionLength:99}'
+)
+O_HUMAN = (
+    '{title:"Python Introduction | Python Education",url:"/go/v1/AAAA",description:"Intro {with braces} and \\"quotes\\".",'
+    'type:"search_result",meta_url:{scheme:"https",netloc:"developers.google.com",hostname:"developers.google.com",'
+    'favicon:"https://imgs.search.brave.com/fav",path:"› google for education  › python introduction"},age:void 0}'
+)
+O_DIRECT = (
+    '{title:"Direct link result",url:"https://example.org/direct?x=1",description:"Plain text.",'
+    'type:"search_result",meta_url:{scheme:"https",netloc:"example.org",hostname:"example.org",favicon:h,path:"› direct"},age:void 0}'
+)
+
+
+def _embedded_page(*objs: str) -> str:
+    data = (
+        'web:{type:"search",choice:void 0,results:[' + ",".join(objs) + ']},mixed:{}'
+    )
+    return (
+        "<html><body><main><div data-type=\"web\" class=\"snippet\">"
+        "<a href=\"/go/v1#AbC\"><div class=\"title\">Welcome to Python.org</div></a></div></main>"
+        "<script>__sveltekit_data = {data:[{x:1},{" + data + "}]};</script></body></html>"
+    )
+
+
+def test_embedded_layer_rebuilds_urls_from_live_format(monkeypatch):
+    html = _embedded_page(O_PYTHON, O_W3, O_HUMAN, O_DIRECT)
+    monkeypatch.setattr("search.engines.base.fetch", lambda *a, **k: FakeResp(html))
+    res = brave.search("python programming")
+    assert [r["url"] for r in res] == [
+        "https://www.python.org/",
+        "https://www.w3schools.com/python/python_intro.asp",
+        "https://example.org/direct?x=1",
+    ]
+    assert res[0]["title"] == "Welcome to Python.org"
+    assert res[0]["snippet"].startswith("Python is a programming language")
+    assert "<strong>" not in res[1]["snippet"] and "Guido van Rossum" in res[1]["snippet"]
+    assert all(r["engine"] == "brave" for r in res)
+
+
+def test_embedded_layer_drops_human_readable_breadcrumbs():
+    assert brave._parse_embedded(_embedded_page(O_HUMAN)) == []
+
+
+def test_embedded_layer_absent_falls_back_to_markup_layers():
+    assert brave._parse_embedded("<html><div data-type='web'></div></html>") == []

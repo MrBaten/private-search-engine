@@ -40,7 +40,7 @@ def _strip_html(raw: Any) -> str:
     """Remove HTML tags, unescape entities and normalise whitespace."""
     if not isinstance(raw, str) or not raw:
         return ""
-    text = BeautifulSoup(raw, "html.parser").get_text(" ")
+    text = BeautifulSoup(raw, "html.parser").get_text()  # inline <span> highlights: no separator, or "word ." gaps appear
     return base.clean_text(html.unescape(text))
 
 
