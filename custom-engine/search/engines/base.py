@@ -17,6 +17,7 @@ from __future__ import annotations
 import http.cookiejar
 import logging
 import random
+import threading
 import re
 from typing import Any, Mapping, Optional
 from urllib.parse import urlsplit
@@ -54,6 +55,30 @@ class _RejectAllCookies(http.cookiejar.DefaultCookiePolicy):
 
     def return_ok(self, cookie: http.cookiejar.Cookie, request: Any) -> bool:  # noqa: D401
         return False
+
+
+# --- Per-call "engine unavailable" signal ---------------------------------
+# Engines never raise; when they are blocked (captcha, HTTP 429, challenge
+# page) they return []. To tell "blocked" apart from "no matches", fetch() and
+# the engines record a short, fixed reason (never the query) in a thread-local
+# slot. The aggregator runs each engine call in its own worker thread, resets
+# the slot before the call and reads it afterwards.
+_call_state = threading.local()
+
+
+def reset_unavailable() -> None:
+    """Clear the unavailable reason for the current thread's engine call."""
+    _call_state.reason = None
+
+
+def mark_unavailable(reason: str) -> None:
+    """Record why the current engine call produced nothing (fixed text only)."""
+    _call_state.reason = reason
+
+
+def unavailable_reason() -> Optional[str]:
+    """The reason recorded by :func:`mark_unavailable` for this thread, if any."""
+    return getattr(_call_state, "reason", None)
 
 
 def random_user_agent() -> str:
@@ -109,12 +134,15 @@ def fetch(
             )
     except Exception as exc:  # noqa: BLE001 - engines must never crash the aggregator
         logger.warning("%s: request failed (%s)", host, type(exc).__name__)
+        mark_unavailable(f"request failed ({type(exc).__name__})")
         return None
     if resp.status_code in (403, 429):
         logger.warning("%s: HTTP %s (blocked or rate limited), skipping", host, resp.status_code)
+        mark_unavailable(f"HTTP {resp.status_code} (blocked or rate limited)")
         return None
     if not 200 <= resp.status_code < 300:
         logger.warning("%s: HTTP %s, skipping", host, resp.status_code)
+        mark_unavailable(f"HTTP {resp.status_code}")
         return None
     return resp
 

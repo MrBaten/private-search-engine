@@ -49,7 +49,7 @@ def test_parse_order_unwrap_and_ads(monkeypatch):
         + _item("https://three.example/", "Three", "third")
     )
     _patch(monkeypatch, html)
-    res = bing.search("hello")
+    res = bing.search("example")
     assert [r["url"] for r in res] == [
         "https://one.example/a", "https://two.example/page?x=1", "https://three.example/"]
     assert [r["title"] for r in res] == ["One", "Two", "Three"]
@@ -66,7 +66,7 @@ def test_malformed_base64_skipped(monkeypatch):
         + _item("https://ok.example/", "Ok", "y")
     )
     _patch(monkeypatch, html)
-    res = bing.search("q")
+    res = bing.search("example")
     assert [r["url"] for r in res] == ["https://ok.example/"]
 
 
@@ -103,7 +103,7 @@ def test_fetch_raises(monkeypatch):
 def test_cap(monkeypatch):
     items = "".join(_item(f"https://s{i}.example/", f"T{i}", "s") for i in range(25))
     _patch(monkeypatch, _page(items))
-    res = bing.search("q")
+    res = bing.search("example")
     assert len(res) == base.MAX_RESULTS_PER_ENGINE == 10
     assert res[0]["url"] == "https://s0.example/"
 
@@ -123,3 +123,35 @@ def test_invalid_language_falls_back(monkeypatch):
     calls = _patch(monkeypatch, _page(""))
     bing.search("q", language="english")
     assert calls[0][1]["params"]["setlang"] == "en"
+
+
+# --- Relevance guard (anti-bot "poisoned" pages) ---------------------------
+# Modelled on a live response (2026-11-24): for "climate change effects" Bing
+# returned ten unrelated Chinese Q&A pages about USB charging.
+_POISONED = [
+    ("https://www.zhihu.com/question/20275311", "手机充电是用电脑 USB 快还是用插座快？ - 知乎", "电脑的USB输出电压为5V"),
+    ("https://zhidao.baidu.com/question/361906162.html", "电脑usb输出电流在哪里看呢 - 百度知道", "在出现和设备管理器窗口中点击"),
+    ("https://zhidao.baidu.com/question/213031359.html", "笔记本电脑USB口能通电却没反应是怎么回事?_百度知道", "常见原因及其解决"),
+]
+
+
+def test_poisoned_page_dropped_and_marked_unavailable(monkeypatch):
+    _patch(monkeypatch, _page("".join(_item(u, t, s) for u, t, s in _POISONED)))
+    base.reset_unavailable()
+    assert bing.search("climate change effects") == []
+    assert "off-topic" in (base.unavailable_reason() or "")
+
+
+def test_relevant_page_kept():
+    items = [
+        {"title": "Effects of climate change", "url": "https://en.wikipedia.org/wiki/Effects_of_climate_change", "snippet": "", "engine": "bing"},
+        {"title": "NASA", "url": "https://science.nasa.gov/climate-change/effects/", "snippet": "", "engine": "bing"},
+        {"title": "Unrelated", "url": "https://x.example/", "snippet": "nothing", "engine": "bing"},
+    ]
+    assert bing._on_topic_share(items, bing._query_terms("climate change effects")) >= bing.MIN_ON_TOPIC_SHARE
+
+
+def test_query_terms_ignore_stopwords_and_keep_unicode():
+    assert bing._query_terms("what is the best laptop") == {"laptop"}
+    assert bing._query_terms("a") == {"a"}
+    assert "জলবায়ু" in bing._query_terms("জলবায়ু পরিবর্তন")

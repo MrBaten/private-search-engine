@@ -60,6 +60,8 @@ def _pse_clean_env(monkeypatch):
     """Make sure demo mode / engine selection from the shell never leaks into tests."""
     monkeypatch.delenv("PSE_DEMO_MODE", raising=False)
     monkeypatch.delenv("PSE_ENGINES", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.delenv("MARGINALIA_API_KEY", raising=False)
 
 
 @pytest.fixture

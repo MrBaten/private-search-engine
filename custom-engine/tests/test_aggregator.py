@@ -251,3 +251,24 @@ def test_default_engines_used_when_none(monkeypatch):
                         lambda: {"a": fake("a", [R("a", "https://example.com/")], calls)})
     resp = aggregator.search_with_meta("q", use_cache=False)
     assert calls == ["a"] and resp["engines_ok"] == ["a"]
+
+
+def test_blocked_engine_reported_as_failed_not_ok():
+    """An engine that returns [] after marking itself unavailable is 'failed'."""
+    from search.engines import base as engines_base
+
+    def blocked(query, **kw):
+        engines_base.mark_unavailable("captcha")
+        return []
+
+    def empty(query, **kw):
+        return []
+
+    def good(query, **kw):
+        return [{"title": "T", "url": "https://ok.example/", "snippet": "", "engine": "good"}]
+
+    resp = aggregator.search_with_meta(
+        "q", engines={"blocked": blocked, "empty": empty, "good": good}, use_cache=False)
+    assert resp["engines_failed"] == ["blocked"]
+    assert resp["engines_ok"] == ["empty", "good"]
+    assert len(resp["results"]) == 1

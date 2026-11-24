@@ -20,7 +20,9 @@ parser is layered:
 Brave frequently serves a captcha or rate-limit page to scraping clients. In
 that case this module deliberately keeps the engine interface and returns an
 empty list instead of fabricating or mocking results: the aggregator treats
-``[]`` as "engine produced nothing" and relies on the other engines.
+``[]`` (marked unavailable, so the results page lists Brave as unavailable)
+and relies on the other engines. Brave's official Search API is used instead
+of the HTML page whenever ``BRAVE_API_KEY`` is set (see ``_search_api``).
 
 Privacy: no cookies are sent (``base.fetch`` rejects them), the query is never
 logged, and only ``base.fetch`` is used for HTTP.
@@ -28,6 +30,7 @@ logged, and only ``base.fetch`` is used for HTTP.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Optional
 from urllib.parse import urlsplit
@@ -307,9 +310,73 @@ def _parse(html: str) -> list[Result]:
     soup = BeautifulSoup(html, "html.parser")
     if _looks_blocked(soup):
         logger.warning("brave: captcha or rate-limit page, skipping")
+        base.mark_unavailable("captcha or rate-limit page")
         return []
     results = _parse_embedded(html) or _parse_primary(soup) or _parse_fallback(soup)
     return results[: base.MAX_RESULTS_PER_ENGINE]
+
+
+# --- Official Brave Search API (preferred when a key is configured) --------
+# Documented at api-dashboard.search.brave.com/documentation/services/web-search:
+# GET https://api.search.brave.com/res/v1/web/search, header
+# X-Subscription-Token, params q / count (max 20) / safesearch
+# (off|moderate|strict); results in web.results[].{title,url,description}.
+API_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+
+
+def api_key() -> str:
+    """``BRAVE_API_KEY`` from the environment ("" when not configured)."""
+    return os.environ.get("BRAVE_API_KEY", "").strip()
+
+
+def _parse_api(payload: object) -> list[Result]:
+    """Results from the official API's JSON (descriptions may contain <strong>)."""
+    web = payload.get("web") if isinstance(payload, dict) else None
+    items = web.get("results") if isinstance(web, dict) else None
+    if not isinstance(items, list):
+        return []
+    out: list[Result] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = _external_url(item.get("url") if isinstance(item.get("url"), str) else None)
+        if not url:
+            continue
+        title = item.get("title") if isinstance(item.get("title"), str) else ""
+        desc = item.get("description") if isinstance(item.get("description"), str) else ""
+        out.append(Result(
+            title=base.clean_text(BeautifulSoup(title, "html.parser").get_text()) or url,
+            url=url,
+            snippet=base.clean_text(BeautifulSoup(desc, "html.parser").get_text()),
+            engine=NAME,
+        ))
+        if len(out) >= base.MAX_RESULTS_PER_ENGINE:
+            break
+    return out
+
+
+def _search_api(query: str, key: str, timeout: float, safe_search: bool,
+                lang: str) -> list[Result]:
+    """Query the official Brave Search API with the configured key."""
+    resp = base.fetch(
+        API_ENDPOINT,
+        params={
+            "q": query,
+            "count": base.MAX_RESULTS_PER_ENGINE,
+            "safesearch": "strict" if safe_search else "off",
+            "search_lang": lang,
+        },
+        headers={"X-Subscription-Token": key, "Accept": "application/json"},
+        timeout=timeout,
+    )
+    if resp is None:
+        return []
+    try:
+        payload = resp.json()
+    except ValueError:
+        base.mark_unavailable("invalid JSON response")
+        return []
+    return _parse_api(payload)
 
 
 def search(query: str, *, timeout: float = 3.0, safe_search: bool = True,
@@ -332,6 +399,9 @@ def search(query: str, *, timeout: float = 3.0, safe_search: bool = True,
         if not q:
             return []
         lang = language if isinstance(language, str) and _LANG_RE.match(language) else "en"
+        key = api_key()
+        if key:
+            return _search_api(q, key, timeout, safe_search, lang)
         params = {
             "q": q,
             "source": "web",

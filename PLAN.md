@@ -221,3 +221,19 @@ Routes:
 - SearXNG env: `SEARXNG_BASE_URL`, `SEARXNG_SECRET` in `searxng/.env` (gitignored; `.env.example` committed). `run.sh` generates a random secret if `.env` is missing or still has the placeholder `change-me`.
 - Nginx: `access_log off;` (privacy), security headers, `/searxng/` → searxng.
 - `test.sh` runs from repo root, needs no Docker daemon (uses `docker compose config` only if `docker` CLI exists, else validates YAML with Python and warns), auto-detects network: offline → starts app with `PSE_DEMO_MODE=1`.
+
+## 6. Integration update (2026-11-24, after a live test on a home connection)
+
+- DuckDuckGo (HTML) answered with a bot challenge, Brave (HTML) with a
+  captcha / HTTP 429, Bing (HTML) with unrelated "poisoned" results. Getting
+  past bot detection (TLS impersonation, captcha solving, tracking-cookie
+  sessions) is explicitly out of scope.
+- `base.mark_unavailable(reason)` / `unavailable_reason()`: a thread-local
+  signal set by `fetch()` (HTTP errors, 403/429) and by engines (challenge
+  pages). `aggregator._call_engine` resets it per call and reports an engine
+  that returned `[]` with a reason as **failed**, so the UI shows it as
+  unavailable instead of "no matches".
+- Bing relevance guard: if fewer than 30 % of results contain a query term
+  (Unicode-aware tokenizer, works for Bangla), the page is dropped.
+- New `marginalia.py` (official API, `MARGINALIA_API_KEY`, falls back to the
+  shared `public` key) and Brave official-API mode (`BRAVE_API_KEY`).

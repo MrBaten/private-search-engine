@@ -3,6 +3,15 @@
 Scrapes ``https://www.bing.com/search`` and parses organic results. Ads are
 skipped, ``/ck/a`` click-tracking redirects are unwrapped to the real
 destination, and the query is never logged.
+
+Relevance guard: in live tests (2026-11-24) Bing answered cookie-less
+automated requests with a normal-looking results page whose ten results were
+unrelated to the query (e.g. Chinese Q&A pages about USB charging for
+"climate change effects") - an anti-bot "poisoned" response. Working around
+that would mean carrying Bing tracking cookies or disguising the client, which
+this project deliberately does not do. Instead, when most results share no
+word with the query, the page is treated as unavailable and dropped, so junk
+never reaches the results page.
 """
 from __future__ import annotations
 
@@ -10,6 +19,7 @@ import base64
 import binascii
 import logging
 import re
+import unicodedata
 from typing import Optional
 from urllib.parse import parse_qs, urlsplit
 
@@ -24,6 +34,12 @@ logger = logging.getLogger(__name__)
 NAME = "bing"
 _URL = "https://www.bing.com/search"
 _LANG_RE = re.compile(r"^[a-z]{2}$")
+_STOPWORDS = frozenset(
+    "the a an and or of to in on for with by at from is are was were be how what "
+    "why when where who which best vs".split()
+)
+#: Minimum share of results that must mention a query term to trust the page.
+MIN_ON_TOPIC_SHARE = 0.3
 _CHALLENGE_MARKERS = (
     "captcha",
     "verify you are human",
@@ -104,6 +120,7 @@ def _parse(html: str) -> list[Result]:
     soup = BeautifulSoup(html, "html.parser")
     if _is_challenge(soup):
         logger.warning("bing: challenge page, skipping")
+        base.mark_unavailable("challenge page")
         return []
     results: list[Result] = []
     for item in soup.select("#b_results li.b_algo"):
@@ -122,6 +139,45 @@ def _parse(html: str) -> list[Result]:
         if len(results) >= base.MAX_RESULTS_PER_ENGINE:
             break
     return results
+
+
+def _words(text: str) -> list[str]:
+    """Split on punctuation, symbols, separators and controls (Unicode-aware).
+
+    ``\\w`` is not enough: it treats combining vowel signs (e.g. Bangla
+    "া", "ু") as word breaks and would cut "জলবায়ু" into fragments.
+    """
+    out: list[str] = []
+    cur: list[str] = []
+    for ch in text or "":
+        if unicodedata.category(ch)[0] in "PSZC":
+            if cur:
+                out.append("".join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        out.append("".join(cur))
+    return out
+
+
+def _query_terms(query: str) -> set[str]:
+    """Meaningful lower-cased words of the query (falls back to all words)."""
+    words = [w.casefold() for w in _words(query)]
+    terms = {w for w in words if len(w) >= 3 and w not in _STOPWORDS}
+    return terms or set(words)
+
+
+def _on_topic_share(results: list[Result], terms: set[str]) -> float:
+    """Fraction of results whose title, snippet or URL contains a query term."""
+    if not results or not terms:
+        return 1.0
+    hits = 0
+    for r in results:
+        hay = f"{r['title']} {r['snippet']} {r['url']}".casefold()
+        if any(t in hay for t in terms):
+            hits += 1
+    return hits / len(results)
 
 
 def search(query: str, *, timeout: float = 3.0, safe_search: bool = True,
@@ -150,7 +206,12 @@ def search(query: str, *, timeout: float = 3.0, safe_search: bool = True,
         resp = base.fetch(_URL, params=params, timeout=timeout)
         if resp is None:
             return []
-        return _parse(resp.text or "")
+        results = _parse(resp.text or "")
+        if results and _on_topic_share(results, _query_terms(query)) < MIN_ON_TOPIC_SHARE:
+            logger.warning("bing: results unrelated to the query (anti-bot response), skipping")
+            base.mark_unavailable("off-topic results (anti-bot response)")
+            return []
+        return results
     except Exception as exc:  # noqa: BLE001 - engines must never raise
         logger.warning("bing: unexpected error (%s)", type(exc).__name__)
         return []

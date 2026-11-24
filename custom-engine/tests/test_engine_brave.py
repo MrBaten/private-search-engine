@@ -195,3 +195,59 @@ def test_embedded_layer_drops_human_readable_breadcrumbs():
 
 def test_embedded_layer_absent_falls_back_to_markup_layers():
     assert brave._parse_embedded("<html><div data-type='web'></div></html>") == []
+
+
+# ---------------------------------------------------------------------------
+# Official Brave Search API mode (BRAVE_API_KEY set).
+# ---------------------------------------------------------------------------
+API_PAYLOAD = {
+    "query": {"original": "climate change effects"},
+    "web": {"results": [
+        {"title": "The <strong>Effects</strong> of Climate Change", "url": "https://science.nasa.gov/climate-change/effects/",
+         "description": "Changes to <strong>Earth's climate</strong> drive effects."},
+        {"title": "Internal", "url": "https://search.brave.com/x", "description": ""},
+        {"title": "No URL"},
+    ]},
+}
+
+
+class FakeJsonResp:
+    status_code = 200
+
+    def __init__(self, payload):
+        self._p = payload
+
+    def json(self):
+        return self._p
+
+
+def test_api_mode_used_when_key_set(monkeypatch):
+    calls = []
+
+    def fake(url, **kw):
+        calls.append((url, kw))
+        return FakeJsonResp(API_PAYLOAD)
+
+    monkeypatch.setattr("search.engines.base.fetch", fake)
+    monkeypatch.setenv("BRAVE_API_KEY", "test-key")
+    res = brave.search("climate change effects", safe_search=False, language="de")
+    url, kw = calls[0]
+    assert url == "https://api.search.brave.com/res/v1/web/search"
+    assert kw["headers"]["X-Subscription-Token"] == "test-key"
+    assert kw["params"]["safesearch"] == "off"
+    assert kw["params"]["search_lang"] == "de"
+    assert [r["url"] for r in res] == ["https://science.nasa.gov/climate-change/effects/"]
+    assert res[0]["title"] == "The Effects of Climate Change"
+    assert "<strong>" not in res[0]["snippet"]
+
+
+def test_api_mode_not_used_without_key(monkeypatch):
+    calls = []
+
+    def fake(url, **kw):
+        calls.append(url)
+        return FakeResp("<html></html>")
+
+    monkeypatch.setattr("search.engines.base.fetch", fake)
+    brave.search("x")
+    assert calls == ["https://search.brave.com/search"]

@@ -19,8 +19,12 @@ SearXNG.
 
 ## Features
 
-- Parallel fan-out to DuckDuckGo, Wikipedia, Brave and Bing with a 3 second
-  per-request budget; a slow or blocked engine never blocks the page.
+- Parallel fan-out to Wikipedia, Marginalia, Brave, DuckDuckGo and Bing with
+  a 3 second per-request budget; a slow or blocked engine never blocks the
+  page, and blocked engines are listed as unavailable instead of failing
+  silently.
+- Official APIs where they exist (Wikipedia, Marginalia, and Brave when you add
+  a `BRAVE_API_KEY`); HTML parsing only as a best-effort extra.
 - URL normalisation, tracking-parameter stripping and de-duplication across
   engines, with a transparent scoring formula.
 - Searches are `POST`-only, so the query never appears in the URL, the browser
@@ -55,7 +59,7 @@ so check the current Google and DuckDuckGo privacy policies before relying on
 this table.
 
 **The honest trade-off.** Meta-search does not make you invisible to the
-upstream engines. DuckDuckGo, Brave, Bing and Wikipedia still see each request
+upstream engines. Wikipedia, Marginalia, Brave, DuckDuckGo and Bing still see each request
 arriving from *your server's* IP address. What they do not receive is your IP
 address, your cookies or any identity: the aggregator forwards only the query
 text and generic browser-like headers (a rotated user agent, `DNT: 1`, no
@@ -77,6 +81,8 @@ flowchart LR
     A -->|parallel, 3 s budget| E2[Wikipedia]
     A -->|parallel, 3 s budget| E3[Brave]
     A -->|parallel, 3 s budget| E4[Bing]
+    A -->|parallel, 3 s budget| E5[Marginalia API]
+    E5 --> D
     E1 --> D[Normalise, dedup, score]
     E2 --> D
     E3 --> D
@@ -96,7 +102,8 @@ Browser --POST /search--> Nginx :80 --/--> custom-engine :5000 (gunicorn, Flask)
                             |                  +-- aggregator.py --ThreadPool (3 s)--> engines/
                             |                                        +-- duckduckgo.py (HTML scrape)
                             |                                        +-- wikipedia.py  (MediaWiki API)
-                            |                                        +-- brave.py      (HTML scrape)
+                            |                                        +-- marginalia.py (official API)
+                            |                                        +-- brave.py      (official API if BRAVE_API_KEY, else HTML)
                             |                                        +-- bing.py       (HTML scrape)
                             |                                        +-- demo.py       (offline fixtures, opt-in)
                             |                                              |
@@ -170,14 +177,24 @@ the query does not end up in browser history through the page title.
 
 ### 1. Quick start (custom engine only)
 
-Requires Python 3.11 or newer.
+Requires Python 3.9 or newer (the Docker image uses 3.11; the test suite
+passes on 3.9, 3.10, 3.11 and 3.13). A virtual environment keeps the
+dependencies out of your system Python:
 
 ```bash
-pip install -r custom-engine/requirements.txt
-python custom-engine/app.py
+python3 -m venv .venv
+.venv/bin/pip install -r custom-engine/requirements.txt
+.venv/bin/python custom-engine/app.py
 ```
 
 Open <http://127.0.0.1:5000>.
+
+**Optional API keys.** Pass them as environment variables (they are never
+stored in code):
+
+```bash
+BRAVE_API_KEY=... MARGINALIA_API_KEY=... .venv/bin/python custom-engine/app.py
+```
 
 **Offline demo.** If your machine cannot reach the search engines (or you only
 want to see the pipeline work), enable demo mode:
@@ -215,7 +232,9 @@ random `SEARXNG_SECRET` if the file is missing or still holds the placeholder
 |---|---|---|---|
 | `HOST` | `custom-engine/app.py` | `127.0.0.1` | Bind address when running `python app.py` directly |
 | `PORT` | `custom-engine/app.py` | `5000` | Port when running `python app.py` directly |
-| `PSE_ENGINES` | custom engine | all four real engines | Comma-separated list of engines to enable, e.g. `wikipedia,duckduckgo`. Demo names `demo_a`, `demo_b` and the fault-injection engine `demo_down` (always fails; for testing) are also accepted |
+| `PSE_ENGINES` | custom engine | all five real engines | Comma-separated list of engines to enable, e.g. `wikipedia,marginalia`. Demo names `demo_a`, `demo_b` and the fault-injection engine `demo_down` (always fails; for testing) are also accepted |
+| `BRAVE_API_KEY` | custom engine | empty | Key for the [official Brave Search API](https://api-dashboard.search.brave.com/). When set, Brave results come from the API instead of the HTML page. Paid, with monthly free credits; check Brave's current pricing |
+| `MARGINALIA_API_KEY` | custom engine | empty (shared `public` key) | Key for the [Marginalia Search API](https://about.marginalia-search.com/article/api/). The shared `public` key is often rate limited; a free non-commercial key is available by email |
 | `PSE_DEMO_MODE` | custom engine | off | `1`, `true` or `yes` adds the offline `demo_a` and `demo_b` engines |
 | `SEARXNG_BASE_URL` | SearXNG | `http://localhost:8080/` in `searxng/.env.example` (standalone stack); `http://localhost/searxng/` for the root stack (override via root `.env`, see `.env.example`) | Public URL (with trailing slash) SearXNG uses to build links. In the root stack the root `.env` / shell value takes precedence over `searxng/.env`; set it to your real HTTPS URL in production |
 | `SEARXNG_SECRET` | SearXNG (`searxng/.env`) | placeholder `change-me`; `run.sh` replaces it with a random value | Secret key for SearXNG; never commit it |
@@ -346,7 +365,7 @@ private-search-engine/
     search/
       __init__.py  types.py  aggregator.py  privacy.py  cache.py
       engines/
-        __init__.py  base.py  duckduckgo.py  wikipedia.py  brave.py  bing.py  demo.py
+        __init__.py  base.py  duckduckgo.py  wikipedia.py  marginalia.py  brave.py  bing.py  demo.py
     templates/   base.html  index.html  results.html
     static/      style.css  script.js  favicon.svg
     tests/       __init__.py  conftest.py  test_*.py
@@ -357,27 +376,31 @@ private-search-engine/
 
 ## Limitations and honest notes
 
-- **Scraping is fragile.** DuckDuckGo, Brave and Bing results are parsed from
-  HTML. When an engine changes its markup, or blocks datacenter IP ranges or
-  automated clients, that engine returns an empty list and the aggregator
-  carries on with the others. Engines that crash or exceed the 3-second budget
-  are listed as unavailable on the results page; an engine that is silently
-  blocked just contributes no results. Expect to maintain the parsers. Wikipedia uses its API and is
-  the most stable.
-- **Live markup check (2026-11-24).** The selectors were checked against live
-  DuckDuckGo, Bing, Brave and Wikipedia results pages in a real browser. That
-  check led to a Brave fix: its result links are now opaque `/go/v1/` redirects,
-  so the parser reads Brave's embedded results data and rebuilds each URL from
-  the hostname and breadcrumb path. Results whose breadcrumb is a
-  human-readable label rather than a URL path (about 1 in 5 in that sample)
-  are dropped rather than guessed.
+- **What works where (live test from a home connection, 2026-11-24).**
+
+  | Engine | How it is queried | Result |
+  |---|---|---|
+  | Wikipedia | Official MediaWiki API | Works |
+  | Marginalia | Official API | Works with your own free key; the shared `public` key is often rate limited |
+  | Brave | Official API with `BRAVE_API_KEY`; otherwise HTML page | API: works (needs a key). HTML: answered with a captcha / HTTP 429 |
+  | DuckDuckGo | HTML page | Answered with a bot "anomaly" challenge page |
+  | Bing | HTML page | Answered with unrelated, "poisoned" results; Bing has had no public search API since Microsoft retired it on 2025-08-11 |
+
+  DuckDuckGo, Brave (HTML) and Bing detect automated clients. This project
+  deliberately does **not** try to get past that (no browser impersonation,
+  no captcha solving, no tracking-cookie sessions): it reports those engines
+  as *Unavailable* on the results page, and drops Bing pages whose results
+  share no words with the query. From other networks the HTML engines may
+  answer normally; when they do, their results are merged like any other.
+  For dependable results add a `BRAVE_API_KEY` and a `MARGINALIA_API_KEY`, or
+  use the SearXNG instance under `/searxng/`.
 - **The test suite mocks HTTP.** Passing tests show the parsing and merging
   logic works on saved samples (including verbatim Brave result data), not
   that every engine accepts requests from your server's IP today.
 - **Images, Videos and News tabs are UI-only for now.** The backend returns the
   same combined web results for those tabs; only the Wikipedia tab filters.
 - **Terms of service.** Automated querying of search engines may be restricted
-  by their terms. Check the terms of DuckDuckGo, Brave, Bing and Wikipedia
+  by their terms. Check the terms of DuckDuckGo, Brave, Bing, Marginalia and Wikipedia
   before running this beyond personal or demo use. Official, keyed search APIs
   are the sanctioned route for heavier use.
 - **Meta-search is not anonymity.** Upstream engines see your server's IP (see

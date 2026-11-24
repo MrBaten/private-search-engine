@@ -19,10 +19,11 @@ import copy
 import logging
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from search import cache, privacy
+from search.engines import base as engines_base
 from search.types import EngineFn, RankedResult, Result, SearchResponse
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,20 @@ def _is_http_url(url: Any) -> bool:
     return isinstance(url, str) and url.lower().startswith(("http://", "https://"))
 
 
+def _call_engine(fn: EngineFn, query: str, timeout: float, safe_search: bool,
+                 language: str) -> tuple[list[Result], Optional[str]]:
+    """Run one engine in the current worker thread.
+
+    Returns its results plus the "unavailable" reason it (or ``base.fetch``)
+    recorded, so a blocked engine that returned ``[]`` is reported as failed
+    instead of looking like "no matches".
+    """
+    engines_base.reset_unavailable()
+    res = fn(query, timeout=timeout, safe_search=safe_search, language=language)
+    reason = None if res else engines_base.unavailable_reason()
+    return res, reason
+
+
 def _run_engines(
     query: str,
     engines: Mapping[str, EngineFn],
@@ -91,8 +106,8 @@ def _run_engines(
     futures: dict[Future, str] = {}
     try:
         for name, fn in engines.items():
-            fut = executor.submit(fn, query, timeout=timeout,
-                                  safe_search=safe_search, language=language)
+            fut = executor.submit(_call_engine, fn, query, timeout,
+                                  safe_search, language)
             futures[fut] = name
         done, not_done = wait(futures, timeout=timeout)
     finally:
@@ -107,10 +122,15 @@ def _run_engines(
     for fut in done:
         name = futures[fut]
         try:
-            res = fut.result()
+            res, reason = fut.result()
         except Exception as exc:  # noqa: BLE001 - engines shouldn't raise; be defensive
             # Log only the exception type: its message could contain the query.
             logger.warning("%s: engine raised %s", name, type(exc).__name__)
+            failed.append(name)
+            continue
+        if reason:
+            # Blocked / rate limited / challenge page: report as unavailable.
+            logger.warning("%s: unavailable (%s)", name, reason)
             failed.append(name)
             continue
         ok[name] = list(res) if isinstance(res, (list, tuple)) else []

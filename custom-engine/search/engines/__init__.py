@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import os
 
-from search.engines import bing, brave, demo, duckduckgo, wikipedia
+from search.engines import bing, brave, demo, duckduckgo, marginalia, wikipedia
 from search.types import EngineFn
 
 ALL_ENGINES: dict[str, EngineFn] = {
     duckduckgo.NAME: duckduckgo.search,
     wikipedia.NAME: wikipedia.search,
+    marginalia.NAME: marginalia.search,
     brave.NAME: brave.search,
     bing.NAME: bing.search,
 }
@@ -39,7 +40,8 @@ def get_enabled_engines() -> dict[str, EngineFn]:
     """Return the engines to query, honouring environment configuration.
 
     * ``PSE_ENGINES``: comma-separated subset of real engine names
-      (default: all of :data:`ALL_ENGINES`). Demo names (``demo_a``,
+      (default: all of :data:`ALL_ENGINES`: DuckDuckGo, Wikipedia,
+      Marginalia, Brave, Bing). Demo names (``demo_a``,
       ``demo_b``) and the fault-injection engine ``demo_down`` may also be
       listed. Unknown names are ignored.
     * ``PSE_DEMO_MODE=1``: additionally enable the offline demo engines.

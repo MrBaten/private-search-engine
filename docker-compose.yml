@@ -14,6 +14,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    environment:
+      # Optional official-API keys, read from the root .env (never committed).
+      - BRAVE_API_KEY=${BRAVE_API_KEY:-}
+      - MARGINALIA_API_KEY=${MARGINALIA_API_KEY:-}
     security_opt:
       - no-new-privileges:true
     cap_drop:

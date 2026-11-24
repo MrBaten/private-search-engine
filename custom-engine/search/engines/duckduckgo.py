@@ -183,6 +183,7 @@ def search(query: str, *, timeout: float = 3.0, safe_search: bool = True,
         results = _parse(html)
         if not results and _looks_blocked(html):
             logger.warning("duckduckgo: challenge page detected, skipping")
+            base.mark_unavailable("bot challenge page")
         return results
     except Exception as exc:  # noqa: BLE001 - engines must never raise
         logger.warning("duckduckgo: unexpected %s", type(exc).__name__)

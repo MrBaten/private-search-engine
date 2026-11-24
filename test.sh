@@ -60,7 +60,7 @@ echo "${B}== 3. Start app on $BASE ==${N}"
 mkdir -p logs data
 # demo_down is a fault-injection engine that always raises: it proves T8
 # (one engine down -> search still works) against the running app.
-PSE_ENGINES="duckduckgo,wikipedia,brave,bing,demo_down" \
+PSE_ENGINES="duckduckgo,wikipedia,marginalia,brave,bing,demo_down" \
   PORT="$PORT" HOST=127.0.0.1 "$PY" custom-engine/app.py > logs/app.log 2>&1 &
 APP_PID=$!
 UP=0

@@ -10,7 +10,7 @@
 {%- set _categories = categories if categories is defined and categories else [("all", "All"), ("images", "Images"), ("videos", "Videos"), ("news", "News"), ("wikipedia", "Wikipedia")] -%}
 {%- set _results = results if results is defined and results else [] -%}
 {%- set _failed = engines_failed if engines_failed is defined and engines_failed else [] -%}
-{%- set _names = {"duckduckgo": "DuckDuckGo", "bing": "Bing", "brave": "Brave", "wikipedia": "Wikipedia"} -%}
+{%- set _names = {"duckduckgo": "DuckDuckGo", "bing": "Bing", "brave": "Brave", "wikipedia": "Wikipedia", "marginalia": "Marginalia"} -%}
 
 {% block header_main %}
   <a class="logo logo-small" href="/" aria-label="PrivateSearch home">
